@@ -1,0 +1,137 @@
+---
+title: "individual1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(tidyverse)
+library(ggrepel)
+library(maps)
+library(mapproj)
+
+mapping <- readxl::read_xlsx("FRPP_GLC_-_United_StatesSep292020.xlsx")
+mapping$`State Name` <- tolower(mapping$`State Name`)
+mapping$`County Name` <- tolower(mapping$`County Name`)
+
+states <- map_data("state")
+county <- map_data("county")
+
+makeCodes <- readr::read_csv("makeCodes.csv")
+stateCodes <- readr::read_csv("stateCodes.csv")
+
+acc <- read.csv("https://raw.githubusercontent.com/xdaiISU/ds202materials/master/hwlabs/fars2017/accident.csv", stringsAsFactors = FALSE)
+ppl <- read.csv("https://raw.githubusercontent.com/xdaiISU/ds202materials/master/hwlabs/fars2017/person.csv", stringsAsFactors = FALSE)
+acc <- mutate(acc, weekDay = wday(acc$DAY_WEEK, label = TRUE))
+```
+
+# 1
+
+* Yes, more accidents tend to happen on the weekends with Friday also having more than average for work days
+
+```{r, warning=FALSE, message=FALSE}
+accDay <- acc %>% select(weekDay)
+accDay <- data.frame(table(accDay))
+accDay %>% ggplot(aes(x = accDay, weight = Freq)) + geom_bar() + ggtitle("Number of Accidents on Each Week Day") + labs(y="Number of Accidents", x="Week Day")
+```
+
+# 2
+
+```{r, warning=FALSE, message=FALSE}
+injSev <- ppl %>% select(STATE, ST_CASE, INJ_SEV)
+```
+
+# 3
+
+```{r, warning=FALSE, message=FALSE}
+make <- ppl %>% select(STATE, INJ_SEV, MAKE)
+make <- make %>% group_by(STATE, MAKE) %>% summarise(pplhitf = sum(INJ_SEV))
+make <- make %>% drop_na()
+make <- make %>% group_by(STATE) %>% filter(pplhitf == max(pplhitf))
+make <- make %>% select(STATE, MAKE)
+make <- left_join(x=make, y=makeCodes, by=c("MAKE"="Codes"))
+make <- left_join(x=make, y=stateCodes, by=c("STATE"="Codes"))
+make$State <- tolower(make$State)
+
+stateName <- states %>% group_by(region) %>% summarize(long=mean(long), lat=mean(lat))
+
+make <- left_join(x=make, y=stateName, by=c("State"="region"))
+```
+
+# 4
+
+```{r, warning=FALSE, message=FALSE}
+g <- states %>% ggplot(aes(x = long, y = lat)) + geom_path(aes(group=group), color='grey') + coord_map() + geom_text(size = 2, aes(label = Make), color='black', data=make)
+g
+```
+
+# 5
+
+```{r, warning=FALSE, message=FALSE}
+accppljoined <- full_join(x=acc, y=ppl, by = c("STATE", "ST_CASE"))
+```
+
+# 6
+
+```{r, warning=FALSE, message=FALSE}
+tally <- accppljoined %>% select(weekDay, HOUR.y, SEX, STATE, ST_CASE)
+tally <- tally %>% mutate(SEX = ifelse(SEX == 1, "male", "female"))
+tally <- tally %>% rename(hour = HOUR.y, sex = SEX)
+
+tallyWeekday <- tally %>% select(weekDay, hour, sex)
+tallyWeekday <- data.frame(table(tallyWeekday))
+
+g <- tallyWeekday %>% group_by(weekDay) %>% ggplot(aes(x = weekDay, y = Freq, color = sex, group=sex)) + geom_point() + geom_line() + facet_wrap(~hour)
+g + theme(axis.text.x=element_text(angle = -90, vjust = 0.5)) + ggtitle("Number of People in Accidents Each Week Day of Every Hour for Both Sex") + xlab("Week Day") + ylab("Number of Accidents")
+```
+
+# 7
+
+```{r, warning=FALSE, message=FALSE}
+fatals <- acc %>% select(STATE, COUNTY, FATALS)
+
+mapping$`County Code` <- as.integer(mapping$`County Code`)
+mapping$`State Code` <- as.integer(mapping$`State Code`) 
+c <- mapping %>% select(`State Code`, `County Code`, `County Name`)
+c <- unique(c)
+
+fatals <- left_join(x=fatals, y=c, by = c("COUNTY" = "County Code", "STATE" = "State Code"))
+fatals <- fatals %>% select(FATALS, `County Name`)
+fatals <- fatals %>% group_by(`County Name`) %>% summarise(Deaths = sum(FATALS))
+
+fatalsMap <- fatals %>% full_join(county, by=c("County Name" = "subregion"))
+ggplot(fatalsMap, aes(x = long, y = lat, fill=Deaths)) + geom_polygon(aes(group=group)) + ggtitle("Deaths per County") + coord_map()
+```
+
+# 8
+
+* There are slightly more average deaths in the winter time. Making winter more dangerous.    
+
+* All states ether increase in death count from summer to winter or stay around the same so which season is more dangerous does not depend on the state.
+
+```{r, warning=FALSE, message=FALSE}
+fatals <- acc %>% select(STATE, COUNTY, FATALS, MONTH)
+
+mapping$`County Code` <- as.integer(mapping$`County Code`)
+mapping$`State Code` <- as.integer(mapping$`State Code`) 
+c <- mapping %>% select(`State Code`, `State Name`, `County Code`, `County Name`)
+c <- unique(c)
+
+fatals <- left_join(x=fatals, y=c, by = c("COUNTY" = "County Code", "STATE" = "State Code"))
+fatals <- fatals %>% select(FATALS, `State Name`, MONTH)
+
+fatalsSummer <- fatals %>% group_by(`State Name`) %>% filter(MONTH %in% c(12, 1, 2, 3)) %>% summarise(Deaths = sum(FATALS))
+fatalsWinter <- fatals %>% group_by(`State Name`) %>% filter(MONTH %in% c(6, 7, 8, 9)) %>% summarise(Deaths = sum(FATALS))
+
+fatalsMapSummer <- fatalsSummer %>% left_join(states, by=c("State Name" = "region"))
+ggplot(fatalsMapSummer, aes(x = long, y = lat, fill=Deaths)) + geom_polygon(aes(group=group)) + ggtitle("Deaths per State in Summer")
+
+fatalsMapWinter <- fatalsWinter %>% left_join(states, by=c("State Name" = "region"))
+ggplot(fatalsMapWinter, aes(x = long, y = lat, fill=Deaths)) + geom_polygon(aes(group=group)) + ggtitle("Deaths per State in Winter")
+```
